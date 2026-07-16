@@ -1,0 +1,14 @@
+{
+  "name": "fleetmind-mcp-workspace",
+  "version": "1.0.0",
+  "description": "Workspace for Vehicle Sales & Telematics MCP system",
+  "scripts": {
+    "install-all": "npm install && npm install --prefix mcp-servers/vehicle-sales && npm install --prefix mcp-servers/vehicle-telematics && npm run build --prefix mcp-servers/vehicle-sales && npm run build --prefix mcp-servers/vehicle-telematics && npm install --prefix backend && npm install --prefix frontend",
+    "build:mcps": "npm run build --prefix mcp-servers/vehicle-sales && npm run build --prefix mcp-servers/vehicle-telematics",
+    "check:mcps": "npm run check --prefix mcp-servers/vehicle-sales && npm run check --prefix mcp-servers/vehicle-telematics",
+    "dev": "npm run build:mcps && npx concurrently \"npm run start --prefix backend\" \"npm run dev --prefix frontend\""
+  },
+  "dependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
