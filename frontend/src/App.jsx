@@ -83,215 +83,79 @@ function App() {
   const handleQueryProcess = async (text) => {
     setLoading(true);
 
-    // Add user query to conversation history
-    const newMessages = [...messages, { sender: 'user', text }];
-    setMessages(newMessages);
-
-    const query = text.toLowerCase().trim();
-
-    // Regular expression to extract chassis numbers (e.g. SCV25000001, SCV26000553)
-    const chassisMatch = text.match(/SCV\d+/i);
-    const chassis = chassisMatch ? chassisMatch[0].toUpperCase() : null;
+    // Add user query to conversation history immediately
+    const userMsg = { sender: 'user', text };
+    const updatedHistory = [...messages, userMsg];
+    setMessages(updatedHistory);
 
     try {
-      // 1. CHASSIS-SPECIFIC QUERIES
-      if (chassis) {
-        // CASE A: Fault codes query
-        if (query.includes('fault') || query.includes('error') || query.includes('diagnostic') || query.includes('downtime')) {
+      // POST the query to our Gemini /api/chat gateway endpoint
+      const res = await fetch(`${API_BASE}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          message: text,
+          history: messages // pass existing history (excluding the new user query we just appended)
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error(`Server returned status ${res.status}`);
+      }
+
+      const responseData = await res.json();
+
+      if (responseData.error) {
+        throw new Error(responseData.error);
+      }
+
+      // If the LLM agent called any tools, append them as visual logs/widgets in sequence
+      if (responseData.toolCalls && responseData.toolCalls.length > 0) {
+        for (const call of responseData.toolCalls) {
+          // Identify widget type based on MCP tool name
+          let widgetType = '';
+          if (call.tool === 'get_vehicle_sales') {
+            // Render detailed view if querying a specific chassis, otherwise general table
+            widgetType = call.arguments.chassis_number ? 'sales' : 'sales-table';
+          } else if (call.tool === 'get_sales_summary') {
+            widgetType = 'sales-list';
+          } else if (call.tool === 'get_telematics_data') {
+            widgetType = 'telematics';
+          } else if (call.tool === 'get_fault_codes') {
+            // Render detailed fault log if querying a specific chassis, otherwise general table
+            widgetType = call.arguments.chassis_number ? 'faults' : 'faults-table';
+          }
+
+          // Append tool execution block to timeline
           setMessages(prev => [...prev, {
             sender: 'assistant',
-            text: `Querying diagnostic logs for ${chassis}...`,
             toolCall: {
-              server: 'vehicle-telematics-server',
-              tool: 'get_fault_codes',
-              arguments: { chassis_number: chassis }
+              server: call.server,
+              tool: call.tool,
+              arguments: call.arguments
+            },
+            widget: {
+              type: widgetType,
+              data: call.data,
+              groupBy: call.arguments.group_by
             }
           }]);
-
-          const res = await fetch(`${API_BASE}/faults?chassis_number=${chassis}`);
-          const data = await res.json();
-
-          setMessages(prev => [...prev, {
-            sender: 'assistant',
-            text: `Here is the fault history retrieved from MongoDB for ${chassis}:`,
-            widget: { type: 'faults', data }
-          }]);
-        }
-        // CASE B: Telematics/Telemetry query
-        else if (query.includes('telematics') || query.includes('speed') || query.includes('battery') || query.includes('soc') || query.includes('temp') || query.includes('live')) {
-          setMessages(prev => [...prev, {
-            sender: 'assistant',
-            text: `Connecting to telematics stream for ${chassis}...`,
-            toolCall: {
-              server: 'vehicle-telematics-server',
-              tool: 'get_telematics_data',
-              arguments: { chassis_number: chassis, limit: 1 }
-            }
-          }]);
-
-          const res = await fetch(`${API_BASE}/telematics?chassis_number=${chassis}&limit=1`);
-          const data = await res.json();
-
-          setMessages(prev => [...prev, {
-            sender: 'assistant',
-            text: `Here are the latest telemetry readings retrieved from MongoDB for ${chassis}:`,
-            widget: { type: 'telematics', data }
-          }]);
-        }
-        // CASE C: Sales details query
-        else if (query.includes('sale') || query.includes('dealer') || query.includes('price') || query.includes('customer') || query.includes('warranty')) {
-          setMessages(prev => [...prev, {
-            sender: 'assistant',
-            text: `Querying sales records for ${chassis}...`,
-            toolCall: {
-              server: 'vehicle-sales-server',
-              tool: 'get_vehicle_sales',
-              arguments: { chassis_number: chassis }
-            }
-          }]);
-
-          const res = await fetch(`${API_BASE}/sales?chassis_number=${chassis}`);
-          const data = await res.json();
-
-          setMessages(prev => [...prev, {
-            sender: 'assistant',
-            text: `Here is the purchase agreement profile retrieved from MongoDB for ${chassis}:`,
-            widget: { type: 'sales', data }
-          }]);
-        }
-        // CASE D: Default chassis number query -> Return combined overview
-        else {
-          setMessages(prev => [...prev, {
-            sender: 'assistant',
-            text: `Retrieving complete vehicle profile (Sales & Telematics) for ${chassis}...`,
-            toolCall: {
-              server: 'vehicle-sales-server & vehicle-telematics-server',
-              tool: 'get_vehicle_sales & get_telematics_data',
-              arguments: { chassis_number: chassis }
-            }
-          }]);
-
-          const salesRes = await fetch(`${API_BASE}/sales?chassis_number=${chassis}`);
-          const salesData = await salesRes.json();
-          const teleRes = await fetch(`${API_BASE}/telematics?chassis_number=${chassis}&limit=1`);
-          const teleData = await teleRes.json();
-
-          setMessages(prev => [...prev, {
-            sender: 'assistant',
-            text: `Here is the consolidated dashboard profile retrieved from MongoDB for ${chassis}:`,
-            widget: { type: 'sales', data: salesData }
-          }]);
-
-          if (teleData.length > 0) {
-            setMessages(prev => [...prev, {
-              sender: 'assistant',
-              text: `Telemetry details:`,
-              widget: { type: 'telematics', data: teleData }
-            }]);
-          }
         }
       }
-      // 2. SUMMARY / STATISTICAL QUERIES
-      else if (query.includes('summary') || query.includes('revenue') || query.includes('total') || query.includes('group by') || query.includes('chart')) {
-        let groupBy = 'model_name';
-        if (query.includes('zone') || query.includes('region')) groupBy = 'zone';
-        if (query.includes('payment') || query.includes('cash')) groupBy = 'payment_mode';
-        if (query.includes('customer') || query.includes('fleet')) groupBy = 'customer_type';
 
-        setMessages(prev => [...prev, {
-          sender: 'assistant',
-          text: `Calculating aggregated sales summary grouped by ${groupBy}...`,
-          toolCall: {
-            server: 'vehicle-sales-server',
-            tool: 'get_sales_summary',
-            arguments: { group_by: groupBy }
-          }
-        }]);
+      // Finally, append the assistant's conversational text response
+      setMessages(prev => [...prev, {
+        sender: 'assistant',
+        text: responseData.text
+      }]);
 
-        const res = await fetch(`${API_BASE}/sales/summary?group_by=${groupBy}`);
-        const data = await res.json();
-
-        setMessages(prev => [...prev, {
-          sender: 'assistant',
-          text: `Here is the aggregated sales summary retrieved from MongoDB:`,
-          widget: { type: 'sales-list', data, groupBy }
-        }]);
-      }
-      // 3. SECTOR FILTERS (ZONES/MODELS)
-      else if (query.includes('sales') || query.includes('list') || query.includes('west') || query.includes('north') || query.includes('east') || query.includes('south')) {
-        let zone = '';
-        if (query.includes('west')) zone = 'West';
-        if (query.includes('north')) zone = 'North';
-        if (query.includes('east')) zone = 'East';
-        if (query.includes('south')) zone = 'South';
-
-        let model = '';
-        if (query.includes('e-swift')) model = 'e-Swift SCV';
-
-        setMessages(prev => [...prev, {
-          sender: 'assistant',
-          text: `Searching general vehicle sales database...`,
-          toolCall: {
-            server: 'vehicle-sales-server',
-            tool: 'get_vehicle_sales',
-            arguments: { zone, model_name: model, limit: 10 }
-          }
-        }]);
-
-        let url = `${API_BASE}/sales?limit=10`;
-        if (zone) url += `&zone=${zone}`;
-        if (model) url += `&model_name=${model}`;
-
-        const res = await fetch(url);
-        const data = await res.json();
-
-        setMessages(prev => [...prev, {
-          sender: 'assistant',
-          text: `Here are the latest general sales records matching your criteria:`,
-          widget: { type: 'sales-table', data }
-        }]);
-      }
-      // 4. CRITICAL FAULTS QUERY
-      else if (query.includes('fault') || query.includes('error') || query.includes('critical') || query.includes('issue')) {
-        let severity = '';
-        if (query.includes('critical')) severity = 'Critical';
-        if (query.includes('major')) severity = 'Major';
-        if (query.includes('minor')) severity = 'Minor';
-
-        setMessages(prev => [...prev, {
-          sender: 'assistant',
-          text: `Searching fault logs...`,
-          toolCall: {
-            server: 'vehicle-telematics-server',
-            tool: 'get_fault_codes',
-            arguments: { severity, limit: 10 }
-          }
-        }]);
-
-        let url = `${API_BASE}/faults?limit=10`;
-        if (severity) url += `&severity=${severity}`;
-
-        const res = await fetch(url);
-        const data = await res.json();
-
-        setMessages(prev => [...prev, {
-          sender: 'assistant',
-          text: `Here are the logged vehicle fault logs matching your query:`,
-          widget: { type: 'faults-table', data }
-        }]);
-      }
-      // 5. UNMATCHED PHRASES
-      else {
-        setMessages(prev => [...prev, {
-          sender: 'assistant',
-          text: "I couldn't match that exact command. I support querying vehicle sales, telematics, and fault codes. Try typing a query like:\n\n* **\"Show sales for SCV25000001\"**\n* **\"Get telematics for SCV25000001\"**\n* **\"Find critical faults\"**\n* **\"Summarize sales by region\"**\n\nOr click one of the quick suggestions below."
-        }]);
-      }
     } catch (err) {
       console.error('Error querying backend:', err);
       setMessages(prev => [...prev, {
         sender: 'assistant',
-        text: `Error connecting to gateway: ${err.message}. Please check if the Express backend gateway task is running on port 5001.`
+        text: `Error connecting to gateway: ${err.message}. Please verify if the Express backend gateway is active on port 5001.`
       }]);
     } finally {
       setLoading(false);

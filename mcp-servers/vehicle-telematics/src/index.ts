@@ -46,6 +46,8 @@ function textResult(value: unknown) {
 }
 
 const limitSchema = z.number().int().min(1).max(100).default(20);
+const severitySchema = z.enum(["Warning", "Minor", "Major", "Critical"]);
+const faultGroupBySchema = z.enum(["chassis_number", "fault_code", "component"]).default("chassis_number");
 const server = new McpServer({ name: "vehicle-telematics-server", version: "2.0.0" });
 
 server.registerTool(
@@ -82,7 +84,7 @@ server.registerTool(
     description: "Fetch recent vehicle fault codes and maintenance records.",
     inputSchema: {
       chassis_number: z.string().trim().min(1).optional(),
-      severity: z.enum(["Major", "Minor", "Critical"]).optional(),
+      severity: severitySchema.optional(),
       resolved_status: z.enum(["Resolved", "In Progress"]).optional(),
       limit: limitSchema,
     },
@@ -101,6 +103,40 @@ server.registerTool(
       .limit(limit)
       .toArray();
     return textResult(records);
+  },
+);
+
+server.registerTool(
+  "get_fault_summary",
+  {
+    title: "Get fault code summary",
+    description:
+      "Aggregate fault counts and repair cost across the whole fleet, grouped by chassis, fault code, or component. Use this (not get_fault_codes) to answer questions like 'which vehicle has the most critical alerts' or 'most common fault codes' — it counts across all matching records instead of returning a capped raw list.",
+    inputSchema: {
+      group_by: faultGroupBySchema,
+      severity: severitySchema.optional(),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async ({ group_by, severity }) => {
+    const summary = await (await database())
+      .collection(config.FAULTS_COLLECTION)
+      .aggregate([
+        ...(severity ? [{ $match: { severity } }] : []),
+        {
+          $group: {
+            _id: `$${group_by}`,
+            total_faults: { $sum: 1 },
+            critical_count: { $sum: { $cond: [{ $eq: ["$severity", "Critical"] }, 1, 0] } },
+            major_count: { $sum: { $cond: [{ $eq: ["$severity", "Major"] }, 1, 0] } },
+            total_repair_cost_inr: { $sum: "$cost_of_repair_inr" },
+          },
+        },
+        { $sort: { critical_count: -1, total_faults: -1 } },
+        { $limit: 50 },
+      ])
+      .toArray();
+    return textResult(summary);
   },
 );
 
