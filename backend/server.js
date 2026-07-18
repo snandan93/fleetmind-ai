@@ -105,14 +105,15 @@ function getGeminiToolDeclarations() {
  * Intent classification guardrail function (belt-and-suspenders).
  *
  * WHY: ADK/agent best practices suggest classifying user queries and short-circuiting
- * off-topic requests before invoking the LLM, restricting responses strictly to EV faults and telematics.
+ * off-topic requests before invoking the LLM, restricting responses to EV sales,
+ * faults, diagnostics, and telematics.
  */
 function scopeGuardrail(userText) {
   const normalizedText = userText.toLowerCase();
   const offTopicSignals = ["weather", "joke", "write code", "translate", "recipe", "song", "movie", "calculate"];
 
   if (offTopicSignals.some(signal => normalizedText.includes(signal))) {
-    return "I am Montra Electric's EV commercial vehicle specialist assistant. I ONLY handle vehicle fault diagnostics, DTC lookups, and telematics/battery queries. Please share a chassis number or vehicle fault query.";
+    return "I am Montra Electric's EV commercial vehicle specialist assistant. I handle EV sales, vehicle fault diagnostics, DTC lookups, and telematics or battery queries. Please ask an EV sales question or share a chassis number or fault code.";
   }
   return null;
 }
@@ -156,13 +157,16 @@ app.post("/api/chat", async (req, res) => {
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
       tools: [{ functionDeclarations: toolDeclarations }],
-      systemInstruction: `You are a specialist agent for Montra Electric EV commercial vehicles.
-You ONLY handle:
+      systemInstruction: `You are a specialist sales and vehicle-operations agent for Montra Electric EV commercial vehicles.
+You handle:
+- EV sales records and analysis (sales by model, zone, customer type, payment mode, revenue, pricing, and vehicle sale details)
 - Vehicle fault code / DTC analysis (e.g. "Top Faults", fault history)
 - Telematics data queries (location, battery SoC/SoH, trip data, alerts)
 - EV-specific diagnostics (battery, motor, BMS, charging faults)
 
-You do NOT answer questions unrelated to these topics (general chat, non-EV vehicles, unrelated company info, etc.). If asked something out of scope, politely say this agent is scoped to EV fault and telematics analysis only, and ask for a chassis number or fault code query instead.
+You do NOT answer questions unrelated to these topics (general chat, non-EV vehicles, unrelated company info, etc.). If asked something out of scope, politely say this agent is scoped to EV sales, fault diagnostics, and telematics analysis, and ask for an EV sales question, chassis number, or fault code instead.
+
+For sales questions about individual vehicles or filtered sales records, use get_vehicle_sales. For sales totals, rankings, revenue, average price, or comparisons across models, zones, customer types, or payment modes, use get_sales_summary. Never infer fleet-wide sales totals from a capped get_vehicle_sales result.
 
 If the user asks about faults without providing a chassis number, execute the fault query tool WITHOUT a chassis number filter to fetch recent vehicle faults across the entire fleet, identify the top/most common fault codes among all vehicles, and display them.
 
