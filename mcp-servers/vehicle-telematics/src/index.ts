@@ -46,6 +46,7 @@ function textResult(value: unknown) {
 }
 
 const limitSchema = z.number().int().min(1).max(100).default(20);
+const telematicsLimitSchema = z.number().int().min(1).max(100).optional();
 const severitySchema = z.enum(["Warning", "Minor", "Major", "Critical"]);
 const faultGroupBySchema = z.enum(["chassis_number", "fault_code", "component"]).default("chassis_number");
 const server = new McpServer({ name: "vehicle-telematics-server", version: "2.0.0" });
@@ -54,15 +55,17 @@ server.registerTool(
   "get_telematics_data",
   {
     title: "Get vehicle telematics data",
-    description: "Fetch recent vehicle telemetry such as battery, speed, and location.",
+    description:
+      "Fetch vehicle telemetry such as battery, speed, and location. For a specific chassis, this returns only its latest reading unless limit is explicitly greater than 1. Use multiple readings only when the user asks for history or trends.",
     inputSchema: {
       chassis_number: z.string().trim().min(1).optional(),
       alert_flag: z.enum(["Yes", "No"]).optional(),
-      limit: limitSchema,
+      limit: telematicsLimitSchema,
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ chassis_number, alert_flag, limit }) => {
+    const effectiveLimit = limit ?? (chassis_number ? 1 : 20);
     const query: Filter<Document> = {
       ...(chassis_number && { chassis_number }),
       ...(alert_flag && { alert_flag }),
@@ -71,7 +74,7 @@ server.registerTool(
       .collection(config.TELEMATICS_COLLECTION)
       .find(query)
       .sort({ reading_timestamp: -1 })
-      .limit(limit)
+      .limit(effectiveLimit)
       .toArray();
     return textResult(records);
   },
