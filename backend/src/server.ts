@@ -1,22 +1,82 @@
-import express from "express";
+import express, { type Request, type Response } from "express";
 import cors from "cors";
 import path from "path";
 import fs from "fs";
 import { loadEnvFile } from "process";
 import { fileURLToPath } from "url";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { MCPToolset } from "@google/adk";
+import { MCPToolset, type BaseTool } from "@google/adk";
+import type { FunctionDeclaration } from "@google/generative-ai";
 
 // Setup relative path variables since we are using ESM modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const backendDir = path.resolve(__dirname, "..");
+const workspaceDir = path.resolve(backendDir, "..");
+const childProcessEnv = Object.fromEntries(
+  Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+);
+
+interface ChatHistoryMessage {
+  sender: "user" | "assistant";
+  text?: string;
+  toolCall?: unknown;
+  widget?: unknown;
+}
+
+interface ChatRequestBody {
+  message?: string;
+  history?: ChatHistoryMessage[];
+}
+
+interface McpTextResult {
+  content: Array<{ text: string }>;
+}
+
+interface ServiceError extends Error {
+  status?: number;
+}
+
+function errorDetails(error: unknown): ServiceError {
+  return error instanceof Error ? error as ServiceError : new Error(String(error));
+}
+
+function queryString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function queryInteger(value: unknown): number | undefined {
+  const stringValue = queryString(value);
+  if (!stringValue) return undefined;
+  const parsed = Number.parseInt(stringValue, 10);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+function toolResultText(result: unknown): string {
+  const candidate = result as Partial<McpTextResult>;
+  const text = candidate.content?.[0]?.text;
+  if (typeof text !== "string") {
+    throw new Error("MCP tool returned an invalid text result");
+  }
+  return text;
+}
+
+async function runTool(tool: BaseTool, args: Record<string, unknown>): Promise<string> {
+  const result = await tool.runAsync({
+    args,
+    // MCP tools only read the abort signal from this boundary today. ADK's
+    // public type expects a full Context, which is supplied by Runner-based agents.
+    toolContext: { abortSignal: undefined } as never,
+  });
+  return toolResultText(result);
+}
 
 // Load env files from typical locations to be extremely robust
 const envPaths = [
-  path.resolve(__dirname, "./.env"),
-  path.resolve(__dirname, "../.env"),
-  path.resolve(__dirname, "../mcp-servers/vehicle-sales/.env"),
-  path.resolve(__dirname, "../mcp-servers/vehicle-telematics/.env")
+  path.resolve(backendDir, ".env"),
+  path.resolve(workspaceDir, ".env"),
+  path.resolve(workspaceDir, "mcp-servers/vehicle-sales/.env"),
+  path.resolve(workspaceDir, "mcp-servers/vehicle-telematics/.env")
 ];
 
 for (const envPath of envPaths) {
@@ -31,21 +91,21 @@ for (const envPath of envPaths) {
 }
 
 const app = express();
-const PORT = process.env.PORT || 5001;
+const PORT = Number.parseInt(process.env.PORT ?? "5001", 10);
 
 // Enable CORS and JSON parsing middleware
 app.use(cors());
 app.use(express.json());
 
 // Reference storage for our ADK MCP Toolsets and tools
-let salesToolset = null;
-let telematicsToolset = null;
-let salesTools = [];
-let telematicsTools = [];
+let salesToolset: MCPToolset | null = null;
+let telematicsToolset: MCPToolset | null = null;
+let salesTools: BaseTool[] = [];
+let telematicsTools: BaseTool[] = [];
 
 // Initialize the Google GenAI SDK if API key is present
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-let genAI = null;
+let genAI: GoogleGenerativeAI | null = null;
 if (GEMINI_API_KEY) {
   genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
   console.log("Google Generative AI SDK initialized successfully.");
@@ -60,8 +120,8 @@ if (GEMINI_API_KEY) {
  * the list of available tools, resolving them into standard ADK BaseTool instances.
  */
 async function startMcpServices() {
-  const salesPath = path.resolve(__dirname, "../mcp-servers/vehicle-sales/dist/index.js");
-  const telematicsPath = path.resolve(__dirname, "../mcp-servers/vehicle-telematics/dist/index.js");
+  const salesPath = path.resolve(workspaceDir, "mcp-servers/vehicle-sales/dist/index.js");
+  const telematicsPath = path.resolve(workspaceDir, "mcp-servers/vehicle-telematics/dist/index.js");
 
   console.log("Connecting to MCP servers via Google ADK...");
 
@@ -70,7 +130,7 @@ async function startMcpServices() {
     serverParams: {
       command: 'node',
       args: [salesPath],
-      env: process.env
+      env: childProcessEnv
     }
   });
 
@@ -79,7 +139,7 @@ async function startMcpServices() {
     serverParams: {
       command: 'node',
       args: [telematicsPath],
-      env: process.env
+      env: childProcessEnv
     }
   });
 
@@ -96,8 +156,8 @@ async function startMcpServices() {
  * formats schemas into uppercase and strips metadata variables.
  */
 function getGeminiToolDeclarations() {
-  const salesDeclarations = salesTools.map(t => t._getDeclaration());
-  const telematicsDeclarations = telematicsTools.map(t => t._getDeclaration());
+  const salesDeclarations = salesTools.map((tool) => tool._getDeclaration()).filter((declaration) => declaration !== undefined);
+  const telematicsDeclarations = telematicsTools.map((tool) => tool._getDeclaration()).filter((declaration) => declaration !== undefined);
   return [...salesDeclarations, ...telematicsDeclarations];
 }
 
@@ -108,7 +168,7 @@ function getGeminiToolDeclarations() {
  * off-topic requests before invoking the LLM, restricting responses to EV sales,
  * faults, diagnostics, and telematics.
  */
-function scopeGuardrail(userText) {
+function scopeGuardrail(userText: string): string | null {
   const normalizedText = userText.toLowerCase();
   const offTopicSignals = ["weather", "joke", "write code", "translate", "recipe", "song", "movie", "calculate"];
 
@@ -125,8 +185,8 @@ function scopeGuardrail(userText) {
  * along with the MCP tool schemas, runs the tool-calling loop against MongoDB, feeds back
  * results, and returns the final conversational response + logs to the frontend.
  */
-app.post("/api/chat", async (req, res) => {
-  const { message, history } = req.body;
+app.post("/api/chat", async (req: Request<Record<string, never>, unknown, ChatRequestBody>, res: Response) => {
+  const { message, history = [] } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: "Message query is required" });
@@ -156,7 +216,9 @@ app.post("/api/chat", async (req, res) => {
     // 3. Initialize Gemini 2.5 Flash with strict, locked system instructions
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
-      tools: [{ functionDeclarations: toolDeclarations }],
+      // ADK currently emits declarations from @google/genai while this legacy
+      // Gemini client consumes the structurally equivalent SDK declaration.
+      tools: [{ functionDeclarations: toolDeclarations as unknown as FunctionDeclaration[] }],
       systemInstruction: `You are a specialist sales and vehicle-operations agent for Montra Electric EV commercial vehicles.
 You handle:
 - EV sales records and analysis (sales by model, zone, customer type, payment mode, revenue, pricing, and vehicle sale details)
@@ -174,15 +236,15 @@ For any question that requires counting, ranking, or comparing across the whole 
     });
 
     // 3. Map pure text message history for conversation context (ignoring raw data widgets to prevent token overflow)
-    let textHistory = (history || [])
-      .filter(msg => msg.text && !msg.toolCall && !msg.widget)
-      .map(msg => ({
+    const textHistory = history
+      .filter((msg): msg is ChatHistoryMessage & { text: string } => Boolean(msg.text) && !msg.toolCall && !msg.widget)
+      .map((msg) => ({
         role: msg.sender === 'user' ? 'user' : 'model',
         parts: [{ text: msg.text }]
       }));
 
     // Ensure the chat history starts with a 'user' role as required by Gemini
-    if (textHistory.length > 0 && textHistory[0].role === 'model') {
+    if (textHistory.at(0)?.role === 'model') {
       textHistory.shift();
     }
 
@@ -204,7 +266,6 @@ For any question that requires counting, ranking, or comparing across the whole 
         const { name, args } = call;
         console.log(`Gemini requested tool call: ${name} with args:`, args);
 
-        let toolResult = null;
         let serverName = "";
 
         // Find the matching ADK tool
@@ -221,12 +282,7 @@ For any question that requires counting, ranking, or comparing across the whole 
         }
 
         // Run the tool via Google ADK runAsync
-        toolResult = await tool.runAsync({
-          args,
-          toolContext: { abortSignal: undefined }
-        });
-
-        const resultText = toolResult.content[0].text;
+        const resultText = await runTool(tool, args as Record<string, unknown>);
         const parsedData = JSON.parse(resultText);
 
         // Store log details so the UI can render rich interactive visual widgets
@@ -258,11 +314,12 @@ For any question that requires counting, ranking, or comparing across the whole 
       toolCalls: toolCallsMade
     });
 
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error in Gemini /api/chat gateway agent:", error);
+    const serviceError = errorDetails(error);
 
     // Catch 429 quota/rate limit error and return a user-friendly suggestion
-    if (error.status === 429 || error.message?.includes("429") || error.message?.includes("Quota")) {
+    if (serviceError.status === 429 || serviceError.message.includes("429") || serviceError.message.includes("Quota")) {
       return res.json({
         text: "⚠️ **Gemini API Rate Limit Exceeded (429: Too Many Requests)**. Your API key has temporarily hit its quota limit. Please wait a few seconds and try your query again.",
         toolCalls: []
@@ -271,14 +328,14 @@ For any question that requires counting, ranking, or comparing across the whole 
 
     // Catch transient Gemini overload/outage errors and return a user-friendly suggestion
     // instead of a generic 500, which the frontend otherwise reports as "gateway is down".
-    if (error.status === 503 || error.status === 500 || error.message?.includes("503") || error.message?.includes("overloaded") || error.message?.includes("high demand")) {
+    if (serviceError.status === 503 || serviceError.status === 500 || serviceError.message.includes("503") || serviceError.message.includes("overloaded") || serviceError.message.includes("high demand")) {
       return res.json({
         text: "⚠️ **Gemini API Temporarily Unavailable (503)**. Google's model is experiencing high demand right now. This is not a problem with the FleetMind gateway — please wait a few seconds and try again.",
         toolCalls: []
       });
     }
 
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: serviceError.message });
   }
 });
 
@@ -288,7 +345,7 @@ For any question that requires counting, ranking, or comparing across the whole 
  * WHY: This HTTP endpoint accepts queries from the React UI, validates/forwards
  * them to the Vehicle Sales MCP Server using the MCP 'callTool' protocol, and returns the result.
  */
-app.get("/api/sales", async (req, res) => {
+app.get("/api/sales", async (req: Request, res: Response) => {
   if (salesTools.length === 0) {
     return res.status(500).json({ error: "Sales MCP tools are not loaded" });
   }
@@ -299,28 +356,20 @@ app.get("/api/sales", async (req, res) => {
     const tool = salesTools.find(t => t.name === "get_vehicle_sales");
     if (!tool) throw new Error("Tool get_vehicle_sales not found");
 
-    const result = await tool.runAsync({
-      args: {
-        chassis_number,
-        model_name,
-        zone,
-        limit: limit ? parseInt(limit, 10) : undefined
-      },
-      toolContext: { abortSignal: undefined }
+    const resultText = await runTool(tool, {
+      chassis_number: queryString(chassis_number),
+      model_name: queryString(model_name),
+      zone: queryString(zone),
+      limit: queryInteger(limit),
     });
-
-    if (result.content && result.content[0]) {
-      const data = JSON.parse(result.content[0].text);
-      return res.json(data);
-    }
-    return res.json([]);
-  } catch (error) {
+    return res.json(JSON.parse(resultText));
+  } catch (error: unknown) {
     console.error("Error fetching sales via ADK:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: errorDetails(error).message });
   }
 });
 
-app.get("/api/sales/summary", async (req, res) => {
+app.get("/api/sales/summary", async (req: Request, res: Response) => {
   if (salesTools.length === 0) {
     return res.status(500).json({ error: "Sales MCP tools are not loaded" });
   }
@@ -331,23 +380,15 @@ app.get("/api/sales/summary", async (req, res) => {
     const tool = salesTools.find(t => t.name === "get_sales_summary");
     if (!tool) throw new Error("Tool get_sales_summary not found");
 
-    const result = await tool.runAsync({
-      args: { group_by },
-      toolContext: { abortSignal: undefined }
-    });
-
-    if (result.content && result.content[0]) {
-      const data = JSON.parse(result.content[0].text);
-      return res.json(data);
-    }
-    return res.json([]);
-  } catch (error) {
+    const resultText = await runTool(tool, { group_by: queryString(group_by) });
+    return res.json(JSON.parse(resultText));
+  } catch (error: unknown) {
     console.error("Error fetching sales summary via ADK:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: errorDetails(error).message });
   }
 });
 
-app.get("/api/telematics", async (req, res) => {
+app.get("/api/telematics", async (req: Request, res: Response) => {
   if (telematicsTools.length === 0) {
     return res.status(500).json({ error: "Telematics MCP tools are not loaded" });
   }
@@ -358,27 +399,19 @@ app.get("/api/telematics", async (req, res) => {
     const tool = telematicsTools.find(t => t.name === "get_telematics_data");
     if (!tool) throw new Error("Tool get_telematics_data not found");
 
-    const result = await tool.runAsync({
-      args: {
-        chassis_number,
-        alert_flag,
-        limit: limit ? parseInt(limit, 10) : undefined
-      },
-      toolContext: { abortSignal: undefined }
+    const resultText = await runTool(tool, {
+      chassis_number: queryString(chassis_number),
+      alert_flag: queryString(alert_flag),
+      limit: queryInteger(limit),
     });
-
-    if (result.content && result.content[0]) {
-      const data = JSON.parse(result.content[0].text);
-      return res.json(data);
-    }
-    return res.json([]);
-  } catch (error) {
+    return res.json(JSON.parse(resultText));
+  } catch (error: unknown) {
     console.error("Error fetching telematics via ADK:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: errorDetails(error).message });
   }
 });
 
-app.get("/api/faults", async (req, res) => {
+app.get("/api/faults", async (req: Request, res: Response) => {
   if (telematicsTools.length === 0) {
     return res.status(500).json({ error: "Telematics MCP tools are not loaded" });
   }
@@ -389,24 +422,16 @@ app.get("/api/faults", async (req, res) => {
     const tool = telematicsTools.find(t => t.name === "get_fault_codes");
     if (!tool) throw new Error("Tool get_fault_codes not found");
 
-    const result = await tool.runAsync({
-      args: {
-        chassis_number,
-        severity,
-        resolved_status,
-        limit: limit ? parseInt(limit, 10) : undefined
-      },
-      toolContext: { abortSignal: undefined }
+    const resultText = await runTool(tool, {
+      chassis_number: queryString(chassis_number),
+      severity: queryString(severity),
+      resolved_status: queryString(resolved_status),
+      limit: queryInteger(limit),
     });
-
-    if (result.content && result.content[0]) {
-      const data = JSON.parse(result.content[0].text);
-      return res.json(data);
-    }
-    return res.json([]);
-  } catch (error) {
+    return res.json(JSON.parse(resultText));
+  } catch (error: unknown) {
     console.error("Error fetching faults via ADK:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: errorDetails(error).message });
   }
 });
 
@@ -421,7 +446,7 @@ async function main() {
     app.listen(PORT, () => {
       console.log(`Express MCP Gateway running at http://localhost:${PORT}`);
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Initialization error:", error);
     process.exit(1);
   }

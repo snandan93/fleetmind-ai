@@ -93,12 +93,16 @@ Example questions:
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev` | Build the MCP servers and start the backend and frontend |
+| `npm run dev` | Build the MCP servers and start the TypeScript backend and frontend in watch mode |
+| `npm run check` | Type-check the backend, frontend, and both MCP servers |
+| `npm run build` | Create production builds for every workspace |
 | `npm run build:mcps` | Compile both TypeScript MCP servers |
 | `npm run check:mcps` | Type-check both MCP servers without emitting files |
-| `npm run start --prefix backend` | Start only the Express gateway |
+| `npm run dev --prefix backend` | Start only the TypeScript Express gateway in watch mode |
+| `npm run build --prefix backend` | Compile the Express gateway to `backend/dist` |
+| `npm run start --prefix backend` | Start the compiled Express gateway |
 | `npm run dev --prefix frontend` | Start only the Vite frontend |
-| `npm run build --prefix frontend` | Create a production frontend build |
+| `npm run build --prefix frontend` | Type-check and create a production frontend build |
 | `npm run lint --prefix frontend` | Lint the frontend source |
 
 ## API endpoints

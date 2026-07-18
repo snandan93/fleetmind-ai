@@ -1,11 +1,89 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+
+type Sender = 'user' | 'assistant';
+type WidgetType = 'sales' | 'sales-table' | 'sales-list' | 'telematics' | 'faults' | 'faults-table' | '';
+
+interface ToolArguments extends Record<string, unknown> {
+  chassis_number?: string;
+  group_by?: string;
+}
+
+interface ToolCall {
+  server: string;
+  tool: string;
+  arguments: ToolArguments;
+}
+
+interface WidgetRecord {
+  _id?: string;
+  chassis_number?: string;
+  model_name?: string;
+  vertical_label?: string;
+  vertical?: string;
+  dealer_name?: string;
+  zone?: string;
+  sale_date?: string;
+  customer_name?: string;
+  customer_type?: string;
+  ex_showroom_price_inr?: number;
+  battery_capacity_kwh?: number;
+  motor_power_kw?: number;
+  warranty_years?: number;
+  salesperson_name?: string;
+  sale_status?: string;
+  soc_percent?: number;
+  speed_kmph?: number;
+  range_remaining_km?: number;
+  battery_temp_c?: number;
+  motor_temp_c?: number;
+  odometer_km?: number;
+  gps_latitude?: number;
+  gps_longitude?: number;
+  vehicle_status?: string;
+  ignition_status?: string;
+  charging_status?: string;
+  alert_flag?: 'Yes' | 'No';
+  fault_code?: string;
+  component?: string;
+  severity?: 'Warning' | 'Minor' | 'Major' | 'Critical';
+  downtime_hours?: number;
+  cost_of_repair_inr?: number;
+  resolved_status?: 'Resolved' | 'In Progress';
+  detected_timestamp?: string;
+  total_sales?: number;
+  total_revenue_inr?: number;
+  avg_price_inr?: number;
+}
+
+interface Widget {
+  type: WidgetType;
+  data: WidgetRecord[];
+  groupBy?: string;
+}
+
+interface Message {
+  sender: Sender;
+  text?: string;
+  toolCall?: ToolCall;
+  widget?: Widget;
+}
+
+interface ChatToolCall extends ToolCall {
+  data: WidgetRecord[];
+}
+
+interface ChatResponse {
+  text: string;
+  toolCalls: ChatToolCall[];
+  error?: string;
+}
 
 // API Server Address matching our backend gateway port
 const API_BASE = 'http://localhost:5001/api';
 
 function App() {
   // Store the conversation messages history
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState<Message[]>([]);
 
   // Track current text in message input field
   const [inputValue, setInputValue] = useState('');
@@ -14,7 +92,7 @@ function App() {
   const [loading, setLoading] = useState(false);
 
   // Ref to automatically scroll chat window to bottom when new messages arrive
-  const chatEndRef = useRef(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   /**
    * Helper function to scroll the chat timeline to the bottom.
@@ -54,7 +132,7 @@ function App() {
    * WHY: Since prices in our MongoDB collections are stored as raw integers,
    * presenting them as formatted currency strings is essential for clean UI layouts.
    */
-  const formatINR = (value) => {
+  const formatINR = (value: number | null | undefined): string => {
     if (value === undefined || value === null) return 'N/A';
     return new Intl.NumberFormat('en-IN', {
       style: 'currency',
@@ -69,7 +147,7 @@ function App() {
    * WHY: Used to display raw payloads in mock "tool call logs" to let the
    * user inspect exactly what arguments were passed to the MCP servers.
    */
-  const formatArgs = (args) => {
+  const formatArgs = (args: ToolArguments): string => {
     return JSON.stringify(args, null, 2);
   };
 
@@ -80,11 +158,11 @@ function App() {
    * target variables (like Chassis Numbers, Zones, or Model Classes) and maps
    * them to the corresponding API calls on the Express/MCP gateway.
    */
-  const handleQueryProcess = async (text) => {
+  const handleQueryProcess = async (text: string): Promise<void> => {
     setLoading(true);
 
     // Add user query to conversation history immediately
-    const userMsg = { sender: 'user', text };
+    const userMsg: Message = { sender: 'user', text };
     const updatedHistory = [...messages, userMsg];
     setMessages(updatedHistory);
 
@@ -105,7 +183,7 @@ function App() {
         throw new Error(`Server returned status ${res.status}`);
       }
 
-      const responseData = await res.json();
+      const responseData = await res.json() as ChatResponse;
 
       if (responseData.error) {
         throw new Error(responseData.error);
@@ -115,7 +193,7 @@ function App() {
       if (responseData.toolCalls && responseData.toolCalls.length > 0) {
         for (const call of responseData.toolCalls) {
           // Identify widget type based on MCP tool name
-          let widgetType = '';
+          let widgetType: WidgetType = '';
           if (call.tool === 'get_vehicle_sales') {
             // Render detailed view if querying a specific chassis, otherwise general table
             widgetType = call.arguments.chassis_number ? 'sales' : 'sales-table';
@@ -151,11 +229,12 @@ function App() {
         text: responseData.text
       }]);
 
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Error querying backend:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       setMessages(prev => [...prev, {
         sender: 'assistant',
-        text: `Error connecting to gateway: ${err.message}. Please verify if the Express backend gateway is active on port 5001.`
+        text: `Error connecting to gateway: ${errorMessage}. Please verify if the Express backend gateway is active on port 5001.`
       }]);
     } finally {
       setLoading(false);
@@ -168,7 +247,7 @@ function App() {
    * WHY: Prevents browser page refresh, extracts text from the input,
    * and fires the backend parsing request.
    */
-  const handleSubmit = (e) => {
+  const handleSubmit = (e: FormEvent<HTMLFormElement>): void => {
     e.preventDefault();
     if (!inputValue.trim() || loading) return;
     const text = inputValue;
@@ -443,7 +522,7 @@ function App() {
                     <table>
                       <thead>
                         <tr>
-                          <th>{msg.widget.groupBy.replace('_', ' ').toUpperCase()}</th>
+                          <th>{(msg.widget.groupBy ?? 'group').replace('_', ' ').toUpperCase()}</th>
                           <th>Units Sold</th>
                           <th>Total Revenue</th>
                           <th>Avg Price</th>
