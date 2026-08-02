@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import FleetMap from './FleetMap';
+import TelematicsTrend from './TelematicsTrend';
 
 type Sender = 'user' | 'assistant';
-type WidgetType = 'sales' | 'sales-table' | 'sales-list' | 'telematics' | 'faults' | 'faults-table' | 'fleet-map' | '';
+type WidgetType = 'sales' | 'sales-table' | 'sales-list' | 'telematics' | 'telematics-trend' | 'faults' | 'faults-table' | 'fleet-map' | '';
 
 interface ToolArguments extends Record<string, unknown> {
   chassis_number?: string;
@@ -34,6 +35,7 @@ interface WidgetRecord {
   sale_status?: string;
   soc_percent?: number;
   speed_kmph?: number;
+  reading_timestamp?: string;
   range_remaining_km?: number;
   battery_temp_c?: number;
   motor_temp_c?: number;
@@ -201,7 +203,8 @@ function App() {
           } else if (call.tool === 'get_sales_summary') {
             widgetType = 'sales-list';
           } else if (call.tool === 'get_telematics_data') {
-            widgetType = 'telematics';
+            // Multiple readings for one chassis is a history/trend request; render a chart.
+            widgetType = call.arguments.chassis_number && call.data.length > 1 ? 'telematics-trend' : 'telematics';
           } else if (call.tool === 'get_fleet_locations') {
             widgetType = 'fleet-map';
           } else if (call.tool === 'get_fault_codes') {
@@ -446,6 +449,9 @@ function App() {
                   {/* WIDGET: Live fleet map showing one latest position per vehicle */}
                   {msg.widget.type === 'fleet-map' && <FleetMap data={msg.widget.data} />}
 
+                  {/* WIDGET: Telematics history rendered as SoC/speed/temp trend charts */}
+                  {msg.widget.type === 'telematics-trend' && <TelematicsTrend data={msg.widget.data} />}
+
                   {/* WIDGET 4: Vehicle Fault logs details */}
                   {msg.widget.type === 'faults' && msg.widget.data.length === 0 && (
                     <div style={{ color: 'var(--color-success)', fontSize: '0.9rem', fontWeight: 'bold' }}>✓ No fault codes logged in system. Vehicle health is normal.</div>
@@ -581,6 +587,13 @@ function App() {
             disabled={loading}
           >
             Get Telematics for SCV25000001
+          </button>
+          <button
+            className="suggestion-chip"
+            onClick={() => handleQueryProcess("Show the battery and speed trend for SCV25000001")}
+            disabled={loading}
+          >
+            Show Battery Trend for SCV25000001
           </button>
           <button
             className="suggestion-chip"
