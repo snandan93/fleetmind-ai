@@ -88,6 +88,7 @@ Example questions:
 - `Show the latest telematics data for ABC123`
 - `Which vehicle has the most critical alerts?`
 - `What are the most common fault codes?`
+- `Show me the live fleet map`
 
 ## Useful commands
 
@@ -113,6 +114,7 @@ The Express gateway exposes:
 - `GET /api/sales` — vehicle sales records
 - `GET /api/sales/summary` — aggregated sales results
 - `GET /api/telematics` — recent vehicle telemetry
+- `GET /api/telematics/fleet` — latest position and status for every vehicle, for the live fleet map
 - `GET /api/faults` — recent fault and maintenance records
 
 The MCP servers communicate with the gateway over standard input/output and should

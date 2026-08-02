@@ -47,6 +47,7 @@ function textResult(value: unknown) {
 
 const limitSchema = z.number().int().min(1).max(100).default(20);
 const telematicsLimitSchema = z.number().int().min(1).max(100).optional();
+const fleetLimitSchema = z.number().int().min(1).max(200).default(100);
 const severitySchema = z.enum(["Warning", "Minor", "Major", "Critical"]);
 const faultGroupBySchema = z.enum(["chassis_number", "fault_code", "component"]).default("chassis_number");
 const server = new McpServer({ name: "vehicle-telematics-server", version: "2.0.0" });
@@ -75,6 +76,33 @@ server.registerTool(
       .find(query)
       .sort({ reading_timestamp: -1 })
       .limit(effectiveLimit)
+      .toArray();
+    return textResult(records);
+  },
+);
+
+server.registerTool(
+  "get_fleet_locations",
+  {
+    title: "Get fleet locations",
+    description:
+      "Fetch the single latest GPS position and status for every distinct vehicle in the fleet, for plotting on a live map. Unlike get_telematics_data (which returns raw readings and can repeat a vehicle), this returns exactly one current record per chassis. Use this for fleet-wide location or map questions such as 'show me the fleet map' or 'where are my vehicles right now'.",
+    inputSchema: {
+      alert_flag: z.enum(["Yes", "No"]).optional(),
+      limit: fleetLimitSchema,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async ({ alert_flag, limit }) => {
+    const records = await (await database())
+      .collection(config.TELEMATICS_COLLECTION)
+      .aggregate([
+        { $sort: { reading_timestamp: -1 } },
+        { $group: { _id: "$chassis_number", latest: { $first: "$$ROOT" } } },
+        { $replaceRoot: { newRoot: "$latest" } },
+        ...(alert_flag ? [{ $match: { alert_flag } }] : []),
+        { $limit: limit },
+      ])
       .toArray();
     return textResult(records);
   },

@@ -234,6 +234,8 @@ For a telematics question about a specific chassis, return only the latest readi
 
 If the user asks about faults without providing a chassis number, execute the fault query tool WITHOUT a chassis number filter to fetch recent vehicle faults across the entire fleet, identify the top/most common fault codes among all vehicles, and display them.
 
+For questions about where vehicles currently are, a live map, or fleet-wide location/status overview (not a single chassis), use get_fleet_locations — it returns one current record per vehicle. Use get_telematics_data only for a single chassis or explicit history/trend requests. The get_fleet_locations results are already rendered to the user as a map with color-coded markers and an on-map vehicle count, so do NOT re-list every vehicle and its coordinates, and do NOT state totals or per-status counts yourself (you cannot reliably count a large raw list) — the map legend already shows exact counts and colors. In your text reply just point the user at the map and call out any chassis numbers with alert_flag "Yes" by name.
+
 For any question that requires counting, ranking, or comparing across the whole fleet (e.g. "which vehicle has the most critical alerts", "top fault codes", "most repair cost by component"), use the get_fault_summary tool (group_by chassis_number / fault_code / component) instead of get_fault_codes — get_fault_codes only returns a capped raw list and cannot be used to determine fleet-wide counts or rankings. Never tell the user you are unable to aggregate; call get_fault_summary and answer from its results.`
     });
 
@@ -409,6 +411,28 @@ app.get("/api/telematics", async (req: Request, res: Response) => {
     return res.json(JSON.parse(resultText));
   } catch (error: unknown) {
     console.error("Error fetching telematics via ADK:", error);
+    res.status(500).json({ error: errorDetails(error).message });
+  }
+});
+
+app.get("/api/telematics/fleet", async (req: Request, res: Response) => {
+  if (telematicsTools.length === 0) {
+    return res.status(500).json({ error: "Telematics MCP tools are not loaded" });
+  }
+
+  const { alert_flag, limit } = req.query;
+
+  try {
+    const tool = telematicsTools.find(t => t.name === "get_fleet_locations");
+    if (!tool) throw new Error("Tool get_fleet_locations not found");
+
+    const resultText = await runTool(tool, {
+      alert_flag: queryString(alert_flag),
+      limit: queryInteger(limit),
+    });
+    return res.json(JSON.parse(resultText));
+  } catch (error: unknown) {
+    console.error("Error fetching fleet locations via ADK:", error);
     res.status(500).json({ error: errorDetails(error).message });
   }
 });

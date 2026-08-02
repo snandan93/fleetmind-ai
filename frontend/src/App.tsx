@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import FleetMap from './FleetMap';
 
 type Sender = 'user' | 'assistant';
-type WidgetType = 'sales' | 'sales-table' | 'sales-list' | 'telematics' | 'faults' | 'faults-table' | '';
+type WidgetType = 'sales' | 'sales-table' | 'sales-list' | 'telematics' | 'faults' | 'faults-table' | 'fleet-map' | '';
 
 interface ToolArguments extends Record<string, unknown> {
   chassis_number?: string;
@@ -121,7 +122,7 @@ function App() {
     setMessages([
       {
         sender: 'assistant',
-        text: "Hello! I am your FleetMind MCP Assistant. I am connected to two Model Context Protocol servers:\n\n1. **vehicle-sales-server** (exposing vehicle sales contract metrics)\n2. **vehicle-telematics-server** (exposing live speed, SoC, temps, and fault codes)\n\nYou can query databases using natural phrases or select a quick query below."
+        text: "Hello! I am your FleetMind MCP Assistant. I am connected to two Model Context Protocol servers:\n\n1. **vehicle-sales-server** (exposing vehicle sales contract metrics)\n2. **vehicle-telematics-server** (exposing live speed, SoC, temps, fault codes, and a live fleet map)\n\nYou can query databases using natural phrases or select a quick query below."
       }
     ]);
   }, []);
@@ -201,6 +202,8 @@ function App() {
             widgetType = 'sales-list';
           } else if (call.tool === 'get_telematics_data') {
             widgetType = 'telematics';
+          } else if (call.tool === 'get_fleet_locations') {
+            widgetType = 'fleet-map';
           } else if (call.tool === 'get_fault_codes') {
             // Render detailed fault log if querying a specific chassis, otherwise general table
             widgetType = call.arguments.chassis_number ? 'faults' : 'faults-table';
@@ -440,6 +443,9 @@ function App() {
                     </div>
                   ))}
 
+                  {/* WIDGET: Live fleet map showing one latest position per vehicle */}
+                  {msg.widget.type === 'fleet-map' && <FleetMap data={msg.widget.data} />}
+
                   {/* WIDGET 4: Vehicle Fault logs details */}
                   {msg.widget.type === 'faults' && msg.widget.data.length === 0 && (
                     <div style={{ color: 'var(--color-success)', fontSize: '0.9rem', fontWeight: 'bold' }}>✓ No fault codes logged in system. Vehicle health is normal.</div>
@@ -603,6 +609,13 @@ function App() {
             disabled={loading}
           >
             Find Critical Faults
+          </button>
+          <button
+            className="suggestion-chip"
+            onClick={() => handleQueryProcess("Show me the live fleet map")}
+            disabled={loading}
+          >
+            Show Live Fleet Map
           </button>
         </div>
 
