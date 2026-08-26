@@ -1,0 +1,14 @@
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: ev_sales_db
+    volumes:
+      - fleetmind_mongo_data:/data/db
+      - ./scripts/seed.js:/docker-entrypoint-initdb.d/seed.js:ro
+
+volumes:
+  fleetmind_mongo_data:

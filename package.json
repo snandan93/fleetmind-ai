@@ -8,7 +8,8 @@
     "check:mcps": "npm run check --prefix mcp-servers/vehicle-sales && npm run check --prefix mcp-servers/vehicle-telematics",
     "check": "npm run check:mcps && npm run check --prefix backend && npm run check --prefix frontend",
     "build": "npm run build:mcps && npm run build --prefix backend && npm run build --prefix frontend",
-    "dev": "npm run build:mcps && npx concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\""
+    "dev": "npm run build:mcps && npx concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "seed": "mongosh mongodb://localhost:27017/ev_sales_db scripts/seed.js"
   },
   "dependencies": {
     "concurrently": "^8.2.2"
