@@ -20,7 +20,7 @@ Express + Gemini gateway (port 5001)
 
 - Node.js 20.12 or newer
 - npm
-- A running MongoDB instance containing the required collections
+- A MongoDB instance — either your own, or Docker to run one locally (see step 3 below)
 - A Google Gemini API key
 
 ## Setup
@@ -57,7 +57,31 @@ Express + Gemini gateway (port 5001)
    FAULTS_COLLECTION=fault_codes
    ```
 
-4. Create `backend/.env` and add your Gemini API key:
+4. Get MongoDB running with sample data. If you don't already have a Mongo instance, the
+   fastest path is Docker — this starts MongoDB and seeds it with a sample fleet
+   (vehicles, telematics history, and faults) on first boot:
+
+   ```bash
+   docker compose up -d
+   ```
+
+   Already running your own MongoDB on the default local port? Seed it directly:
+
+   ```bash
+   npm run seed
+   ```
+
+   Using a different host, port, or credentials? Point `mongosh` at your own URI instead:
+
+   ```bash
+   mongosh "<your MONGO_URI>/ev_sales_db" scripts/seed.js
+   ```
+
+   Either way this resets and repopulates `vehicle_sales`, `telematics_data`, and
+   `fault_codes` with enough data to exercise every feature, including vehicles with
+   multiple telematics readings for the trend charts.
+
+5. Create `backend/.env` and add your Gemini API key:
 
    ```dotenv
    GEMINI_API_KEY=your_gemini_api_key
@@ -65,7 +89,7 @@ Express + Gemini gateway (port 5001)
 
    Do not commit any `.env` file or API key.
 
-5. Install all workspace dependencies and build both MCP servers:
+6. Install all workspace dependencies and build both MCP servers:
 
    ```bash
    npm run install-all
@@ -95,6 +119,8 @@ Example questions:
 | Command | Purpose |
 | --- | --- |
 | `npm run dev` | Build the MCP servers and start the TypeScript backend and frontend in watch mode |
+| `npm run seed` | Reset and repopulate sample sales, telematics, and fault data on a local MongoDB |
+| `docker compose up -d` | Start a MongoDB instance pre-seeded with the same sample data on first boot |
 | `npm run check` | Type-check the backend, frontend, and both MCP servers |
 | `npm run build` | Create production builds for every workspace |
 | `npm run build:mcps` | Compile both TypeScript MCP servers |
@@ -119,3 +145,7 @@ The Express gateway exposes:
 
 The MCP servers communicate with the gateway over standard input/output and should
 normally be launched through the root development command.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
