@@ -86,6 +86,7 @@ Example questions:
 
 - `Show sales for chassis number ABC123`
 - `Show the latest telematics data for ABC123`
+- `Show the battery and speed trend for ABC123`
 - `Which vehicle has the most critical alerts?`
 - `What are the most common fault codes?`
 - `Show me the live fleet map`
